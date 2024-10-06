@@ -5,26 +5,35 @@ const jwt = require('jsonwebtoken'); // For generating JWT tokens
 const User = require('../models/userModel');  // Assuming you have a User model
 const SendEmail = require('../utiils/emailService');
 const TokenBlacklist = require('../models/TokenBlackList');
+const authenticate = require('../middlewares/auth');
+const crypto = require('crypto');
+const { logInfo, logError } = require('../logger');
 
 
-
-router.post('/logout', async (req, res) => {
-    const token = req.header('Authorization') ? req.header('Authorization').replace('Bearer ', '') : null;
-
-    if (!token) {
-        return res.status(401).json({ message: 'No token provided.' });
-    }
-
+router.post('/logout', authenticate, async (req, res) => {
     try {
-        const blacklistedToken = new TokenBlacklist({ token });
-        await blacklistedToken.save();
-        res.status(200).json({ message: 'Logged out successfully.' });
-    } catch (error) {
-        res.status(500).json({ message: 'Error logging out.', error });
+      const user = await User.findById(req.user.userId);
+      
+      if (!user) return res.status(404).json({ message: 'User not found' });
+  
+      // Clear the refresh token
+      user.refreshToken = null;
+      await user.save();
+  
+      res.json({ message: 'Logged out successfully' });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: 'Server error' });
     }
-});
+  });
+
 // POST /api/auth/register - Register a new user
 router.post('/register', async (req, res) => {
+    console.log(req.body);
+    // Check if the request body contains the expected properties
+    if (!req.body || !req.body.name || !req.body.email || !req.body.password) {
+        return res.status(400).json({ message: 'Name, email, and password are required.' });
+    }
     const { name, email, password } = req.body; // Expect name here
   
     try {
@@ -47,6 +56,7 @@ router.post('/password-reset', async (req, res) => {
     try {
         const user = await User.findOne({ email });
         if (!user) {
+            logInfo(`Password reset attempt for non-existent user: ${email}`);
             return res.status(404).json({ message: 'User not found.' });
         }
 
@@ -56,10 +66,12 @@ router.post('/password-reset', async (req, res) => {
         await user.save();
 
         const resetUrl = `http://localhost:5000/api/auth/reset-password/${token}`;
+        logInfo(`Password reset requested for user: ${email}, token: ${resetToken}`);
         await sendEmail(user.email, 'Password Reset', `Click this link to reset your password: ${resetUrl}`);
 
         res.status(200).json({ message: 'Reset link sent to your email.' });
     } catch (error) {
+        logError('Error in reset-password', { error, email });
         res.status(500).json({ message: 'Error sending email.', error });
     }
 });
@@ -100,7 +112,8 @@ router.post('/login', async (req, res) => {
     // Find the user by email
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(400).json({ error: 'Invalid credentials' });
+        logInfo(`Failed login attempt: ${email}`);
+        return res.status(400).json({ error: 'Invalid credentials' });
     }
 
     // Compare passwords
@@ -109,16 +122,63 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
 
-    // Generate a JWT token
+    // Generate a short-living JWT token
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: '1h',
+      expiresIn: '15m',
     });
+    // Generate a secure refresh token
+    const refreshToken = crypto.randomBytes(64).toString('hex');
+
+    // Save the refresh token in the database
+    user.refreshToken = refreshToken;
+    await user.save();
+    const accessToken = jwt.sign(
+        { id: user._id, email: user.email }, // Payload (data to encode in the token)
+        process.env.JWT_SECRET,               // Secret key from .env file
+        //{ expiresIn: '1h' }                   // Token expiration time 
+      );
+    logInfo(`Successful login for user: ${email}`);  
+    // Send both tokens to the client
+    res.json({ accessToken, refreshToken });
+
 
     res.status(200).json({ message: 'Login successful', token });
   } catch (err) {
-    console.error(err);
+    //console.error(err);
+    logError('Login Error', { error });
     res.status(500).json({ error: 'Server error' });
   }
 });
+
+router.post('/refresh-token', async (req, res) => {
+    const { refreshToken } = req.body;
+  
+    if (!refreshToken) {
+      return res.status(403).json({ message: 'Refresh token is required' });
+    }
+  
+    try {
+      // Find user with matching refresh token
+      const user = await User.findOne({ refreshToken });
+  
+      if (!user) {
+        return res.status(403).json({ message: 'Invalid refresh token' });
+      }
+  
+      // Generate new access token
+      const accessToken = jwt.sign(
+        { userId: user._id, name: user.name },
+        process.env.JWT_SECRET,
+        { expiresIn: '15m' } // Set short-lived expiry for access token
+      );
+  
+      // Send the new access token
+      res.json({ accessToken });
+  
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: 'Server error' });
+    }
+  });
 
 module.exports = router;

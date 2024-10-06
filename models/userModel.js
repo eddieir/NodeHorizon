@@ -21,8 +21,9 @@ const userSchema = new mongoose.Schema({
         default: 'user'
     },
     resetToken:String,
-    resetTokenExpiration:String
-});
+    resetTokenExpiration:String,
+    refreshToken:{type:String},
+},{timestamps:true});
 
 // Hash password before saving user
 userSchema.pre('save', async function (next) {

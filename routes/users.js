@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/userModel');
-const authenticate = require('../middleware/auth'); // Middleware to verify JWT
+const authenticate = require('../middlewares/auth'); // Middleware to verify JWT
 
 // GET /api/users/profile - Fetch the current user profile
 router.get('/profile', authenticate, async (req, res) => {
