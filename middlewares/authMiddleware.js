@@ -1,24 +1,28 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/userModel');
+const TokenBlacklist = require('../models/TokenBlackList');
 
-const protect = async (req, res, next) => {
-    let token;
-    
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-        token = req.headers.authorization.split(' ')[1];
-    }
+
+const authMiddleware = async (req, res, next) => {
+    const token = req.header('Authorization') ? req.header('Authorization').replace('Bearer ', '') : null;
 
     if (!token) {
-        return res.status(401).json({ message: 'Not authorized' });
+        return res.status(401).json({ message: 'Unauthorized. Token not provided.' });
+    }
+
+    // Check if the token is blacklisted
+    const blacklisted = await TokenBlacklist.findOne({ token });
+    if (blacklisted) {
+        return res.status(401).json({ message: 'Unauthorized. Token is blacklisted.' });
     }
 
     try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        req.user = await User.findById(decoded.id).select('-password');
+        req.user = decoded; // Attach user data to request
         next();
-    } catch (err) {
-        res.status(401).json({ message: 'Not authorized, token failed' });
+    } catch (error) {
+        res.status(401).json({ message: 'Invalid token' });
     }
 };
 
-module.exports = { protect };
+module.exports = { authMiddleware };
